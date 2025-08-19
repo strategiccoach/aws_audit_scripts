@@ -1,6 +1,23 @@
 # AWS S3 File Inventory & Security Audit Tool
 
-A comprehensive Ruby script that scans all S3 buckets in your AWS account to create a detailed database of files, assess public access risks, and help with file lifecycle management.
+A comprehensive set of Ruby scripts that scan all S3 buckets in your AWS account to create a detailed database of files, assess public access risks, and help with file lifecycle management.
+
+## Scripts Overview
+
+- **`audit.rb`** - Main inventory script that scans S3 buckets and creates SQLite database
+- **`csv_file.rb`** - Data export script that converts inventory data to CSV format with filtering options
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [AWS Credentials Setup](#aws-credentials-setup-mac)
+- [Required AWS Permissions](#required-aws-permissions)
+- [Running the Main Audit Script](#how-to-run-the-script)
+- [CSV Export Script](#csv-export-script-csv_filerb)
+- [Analyzing Results](#analyzing-results)
+- [Workflow Examples](#workflow-examples)
+- [Troubleshooting](#troubleshooting)
+- [Security Notes](#security-notes)
 
 ## Prerequisites
 
@@ -242,10 +259,236 @@ If you encounter issues:
 - The SQLite database contains metadata about your files - keep it secure
 - Consider running this on a scheduled basis to maintain current inventory
 
+## CSV Export Script (csv_file.rb)
+
+After running the main audit script, you can use `csv_file.rb` to export your S3 inventory data to CSV format with various filtering options.
+
+### Purpose
+The CSV export script reads from the SQLite database created by `audit.rb` and exports the data to CSV format with powerful filtering capabilities. This is useful for:
+- Creating reports for management
+- Sharing data with teams who prefer spreadsheets
+- Further analysis in Excel, Google Sheets, or other tools
+- Generating targeted lists (e.g., files for cleanup, security review)
+
+### Prerequisites
+- The `audit.rb` script must have been run first to create `aws_s3_inventory.db`
+- Ruby with the `csv` gem (usually included with Ruby)
+
+### Basic Usage
+
+**Export all data:**
+```bash
+ruby csv_file.rb
+```
+
+**Export specific bucket:**
+```bash
+ruby csv_file.rb -b my-bucket-name -o my-bucket-export.csv
+```
+
+**Export with custom output filename:**
+```bash
+ruby csv_file.rb -o custom_export_2024.csv
+```
+
+### Filtering Options
+
+**Filter by ownership:**
+```bash
+# Files without responsible person
+ruby csv_file.rb --no-owner
+
+# Files assigned to specific person
+ruby csv_file.rb -p "john.doe@company.com"
+
+# Files from specific department
+ruby csv_file.rb -D engineering
+```
+
+**Filter by age and size:**
+```bash
+# Files older than 1 year
+ruby csv_file.rb --older-than 365
+
+# Files larger than 100MB
+ruby csv_file.rb --larger-than 100
+
+# Combined: Large old files
+ruby csv_file.rb --older-than 180 --larger-than 50
+```
+
+**Filter by project or purpose:**
+```bash
+# Files from specific project
+ruby csv_file.rb -P "website-redesign"
+
+# Files marked for deletion
+ruby csv_file.rb --deletable
+```
+
+**Limit and order results:**
+```bash
+# Export only top 100 largest files
+ruby csv_file.rb --larger-than 10 --order-by size --limit 100
+
+# Show SQL query being executed
+ruby csv_file.rb --verbose
+```
+
+### Complete Command Reference
+
+```bash
+ruby csv_file.rb [options]
+
+Options:
+  -d, --database PATH     Path to SQLite database (default: aws_s3_inventory.db)
+  -o, --output FILE       Output CSV filename (default: auto-generated with timestamp)
+  -b, --bucket BUCKET     Filter by specific bucket name
+  -p, --person PERSON     Filter by responsible person
+  -D, --department DEPT   Filter by department
+  -P, --project PROJECT   Filter by project name
+  --deletable             Only export files marked for deletion
+  --no-owner              Only export files without responsible person
+  --older-than DAYS       Only export files older than X days
+  --larger-than MB        Only export files larger than X MB
+  --limit COUNT           Limit number of records exported
+  --order-by FIELD        Order results by field (default: bucket_name, key)
+  -v, --verbose           Show SQL query being executed
+  -h, --help              Show help message
+```
+
+### Example Use Cases
+
+**Security audit - Find large public files:**
+```bash
+# First, query the database to identify public files, then export them
+sqlite3 aws_s3_inventory.db "SELECT bucket_id FROM files WHERE is_publicly_accessible = 1 LIMIT 1;"
+ruby csv_file.rb --larger-than 10 -o public_files_review.csv
+```
+
+**Cleanup preparation - Files for deletion:**
+```bash
+# Export old, large files without owners for cleanup review
+ruby csv_file.rb --no-owner --older-than 730 --larger-than 50 -o cleanup_candidates.csv
+```
+
+**Department reports:**
+```bash
+# Export all engineering files
+ruby csv_file.rb -D engineering -o engineering_files.csv
+
+# Export marketing files from specific project
+ruby csv_file.rb -D marketing -P "campaign-2024" -o marketing_campaign_files.csv
+```
+
+**Cost analysis:**
+```bash
+# Export largest files for cost optimization
+ruby csv_file.rb --larger-than 100 --order-by size --limit 200 -o largest_files.csv
+```
+
+### CSV Output Format
+
+The exported CSV includes these columns:
+- `id` - Internal database ID
+- `bucket_name` - S3 bucket name
+- `key` - S3 object key (file path)
+- `size` - File size in bytes
+- `last_modified` - Last modification date
+- `etag` - S3 ETag
+- `storage_class` - S3 storage class
+- `owner_id` - AWS owner ID
+- `owner_display_name` - AWS owner display name
+- `responsible_person` - Identified responsible person
+- `department` - Identified department
+- `project_name` - Identified project
+- `file_purpose` - File purpose (if tagged)
+- `retention_policy` - Retention policy (if set)
+- `review_date` - Review date (if set)
+- `can_be_deleted` - Whether marked for deletion
+- `deletion_approved_by` - Who approved deletion
+- `notes` - Additional notes
+- `created_at` - Database record creation time
+- `updated_at` - Database record update time
+
+### Output Summary
+
+Each export includes summary statistics:
+- Total files and size exported
+- Breakdown by bucket
+- Ownership status
+- Files marked for deletion
+- Age analysis
+- Department breakdown (if available)
+
+## Workflow Examples
+
+Here are common workflows combining both scripts:
+
+### Complete Security Audit Workflow
+```bash
+# Step 1: Run the main audit
+ruby audit.rb
+
+# Step 2: Export public files for security review
+ruby csv_file.rb --verbose > /dev/null 2>&1  # Check if we have public files
+sqlite3 aws_s3_inventory.db "SELECT COUNT(*) FROM files WHERE is_publicly_accessible = 1;"
+
+# If you have public files:
+ruby csv_file.rb --larger-than 1 -o security_review_public_files.csv
+
+# Step 3: Export unowned files for assignment
+ruby csv_file.rb --no-owner --larger-than 10 -o unowned_files_for_assignment.csv
+```
+
+### File Cleanup and Cost Optimization Workflow
+```bash
+# Step 1: Generate cleanup candidates report
+ruby csv_file.rb --no-owner --older-than 365 --larger-than 50 -o cleanup_candidates.csv
+
+# Step 2: Generate department-specific reports for review
+ruby csv_file.rb -D engineering --older-than 180 -o engineering_old_files.csv
+ruby csv_file.rb -D marketing --older-than 180 -o marketing_old_files.csv
+
+# Step 3: After manual review, export confirmed deletion candidates
+ruby csv_file.rb --deletable -o confirmed_for_deletion.csv
+```
+
+### Departmental Reporting Workflow
+```bash
+# Generate reports for each department
+for dept in engineering marketing sales finance; do
+    ruby csv_file.rb -D $dept -o "${dept}_files_report.csv"
+done
+
+# Generate summary of largest files by department
+ruby csv_file.rb --larger-than 100 --order-by size -o largest_files_all_depts.csv
+```
+
+### Regular Monitoring Workflow
+```bash
+# Create monthly monitoring script
+#!/bin/bash
+DATE=$(date +%Y%m%d)
+REPORT_DIR="reports/$DATE"
+mkdir -p $REPORT_DIR
+
+# Run fresh audit
+ruby audit.rb
+
+# Generate standard reports
+ruby csv_file.rb --no-owner -o "$REPORT_DIR/unowned_files_$DATE.csv"
+ruby csv_file.rb --older-than 730 -o "$REPORT_DIR/very_old_files_$DATE.csv"
+ruby csv_file.rb --larger-than 1000 --limit 100 -o "$REPORT_DIR/largest_files_$DATE.csv"
+
+echo "Monthly S3 audit reports generated in $REPORT_DIR"
+```
+
 ## Customization
 
-You can modify the script to:
+You can modify the scripts to:
 - Skip specific buckets (see the hardcoded skip list in `scan_bucket_objects`)
 - Change the database schema for additional metadata
 - Modify ownership extraction patterns for your organization
 - Add custom reporting queries
+- Customize CSV export fields and filters
