@@ -84,6 +84,9 @@ class S3DataExtractor
         f.can_be_deleted,
         f.deletion_approved_by,
         f.notes,
+        f.is_publicly_accessible,
+        f.public_access_method,
+        f.public_access_checked_at,
         f.created_at,
         f.updated_at
       FROM files f
@@ -127,6 +130,18 @@ class S3DataExtractor
       conditions << "f.responsible_person IS NULL"
     end
 
+    if @filter_options[:publicly_accessible]
+      conditions << "f.is_publicly_accessible = 1"
+    end
+
+    if @filter_options[:private_only]
+      conditions << "(f.is_publicly_accessible = 0 OR f.is_publicly_accessible IS NULL)"
+    end
+
+    if @filter_options[:access_method]
+      conditions << "f.public_access_method = '#{@filter_options[:access_method]}'"
+    end
+
     # Add WHERE clause if we have conditions
     unless conditions.empty?
       base_query += " WHERE " + conditions.join(" AND ")
@@ -166,6 +181,9 @@ class S3DataExtractor
           row['can_be_deleted'],
           row['deletion_approved_by'],
           row['notes'],
+          row['is_publicly_accessible'],
+          row['public_access_method'],
+          row['public_access_checked_at'],
           row['created_at'],
           row['updated_at']
         ]
@@ -194,6 +212,9 @@ class S3DataExtractor
       'can_be_deleted',
       'deletion_approved_by',
       'notes',
+      'is_publicly_accessible',
+      'public_access_method',
+      'public_access_checked_at',
       'created_at',
       'updated_at'
     ]
@@ -235,6 +256,29 @@ class S3DataExtractor
       puts "\nDeletion candidates:"
       puts "  Files marked for deletion: #{files_marked_for_deletion}"
       puts "  Potential space savings: #{format_bytes(deletion_size)}"
+    end
+
+    # Public access analysis
+    public_files = data.count { |row| row['is_publicly_accessible'] == 1 }
+    if public_files > 0
+      public_size = data.select { |row| row['is_publicly_accessible'] == 1 }
+                       .sum { |row| row['size'] || 0 }
+      puts "\nPublic access analysis:"
+      puts "  Publicly accessible files: #{public_files}"
+      puts "  Total size of public files: #{format_bytes(public_size)}"
+      
+      # Breakdown by access method
+      access_methods = data.select { |row| row['is_publicly_accessible'] == 1 }
+                          .group_by { |row| row['public_access_method'] || 'unknown' }
+      
+      puts "  Public access methods:"
+      access_methods.each do |method, files|
+        method_size = files.sum { |f| f['size'] || 0 }
+        puts "    #{method}: #{files.length} files (#{format_bytes(method_size)})"
+      end
+    else
+      puts "\nPublic access analysis:"
+      puts "  No publicly accessible files found"
     end
 
     # Age analysis
@@ -327,6 +371,18 @@ def parse_options
       options[:no_owner] = true
     end
 
+    opts.on("--public", "Only export publicly accessible files") do
+      options[:publicly_accessible] = true
+    end
+
+    opts.on("--private", "Only export private files") do
+      options[:private_only] = true
+    end
+
+    opts.on("--access-method METHOD", "Filter by access method (bucket_policy, bucket_acl, object_acl, mixed, none)") do |method|
+      options[:access_method] = method
+    end
+
     opts.on("--older-than DAYS", Integer, "Only export files older than X days") do |days|
       options[:older_than_days] = days
     end
@@ -359,6 +415,8 @@ def parse_options
     opts.separator "  #{$0} --no-owner --older-than 365       # Export unowned files older than 1 year"
     opts.separator "  #{$0} --deletable -D engineering        # Export deletable files from engineering"
     opts.separator "  #{$0} --larger-than 100 --limit 50      # Export 50 largest files over 100MB"
+    opts.separator "  #{$0} --public --larger-than 10         # Export public files larger than 10MB"
+    opts.separator "  #{$0} --access-method bucket_policy     # Export files public via bucket policy"
   end.parse!
 
   options

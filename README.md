@@ -269,6 +269,8 @@ The CSV export script reads from the SQLite database created by `audit.rb` and e
 - Sharing data with teams who prefer spreadsheets
 - Further analysis in Excel, Google Sheets, or other tools
 - Generating targeted lists (e.g., files for cleanup, security review)
+- **Security auditing** - Identify and export publicly accessible files by access method
+- **Compliance reporting** - Generate permission-based reports for security reviews
 
 ### Prerequisites
 - The `audit.rb` script must have been run first to create `aws_s3_inventory.db`
@@ -326,6 +328,20 @@ ruby csv_file.rb -P "website-redesign"
 ruby csv_file.rb --deletable
 ```
 
+**Filter by file permissions:**
+```bash
+# Only publicly accessible files
+ruby csv_file.rb --public
+
+# Only private files
+ruby csv_file.rb --private
+
+# Files public via specific access method
+ruby csv_file.rb --access-method bucket_policy
+ruby csv_file.rb --access-method object_acl
+ruby csv_file.rb --access-method mixed
+```
+
 **Limit and order results:**
 ```bash
 # Export only top 100 largest files
@@ -349,6 +365,9 @@ Options:
   -P, --project PROJECT   Filter by project name
   --deletable             Only export files marked for deletion
   --no-owner              Only export files without responsible person
+  --public                Only export publicly accessible files
+  --private               Only export private files
+  --access-method METHOD  Filter by access method (bucket_policy, bucket_acl, object_acl, mixed, none)
   --older-than DAYS       Only export files older than X days
   --larger-than MB        Only export files larger than X MB
   --limit COUNT           Limit number of records exported
@@ -359,11 +378,19 @@ Options:
 
 ### Example Use Cases
 
-**Security audit - Find large public files:**
+**Security audit - Find public files:**
 ```bash
-# First, query the database to identify public files, then export them
-sqlite3 aws_s3_inventory.db "SELECT bucket_id FROM files WHERE is_publicly_accessible = 1 LIMIT 1;"
-ruby csv_file.rb --larger-than 10 -o public_files_review.csv
+# Export all publicly accessible files
+ruby csv_file.rb --public -o all_public_files.csv
+
+# Export large public files for priority review
+ruby csv_file.rb --public --larger-than 10 -o large_public_files.csv
+
+# Export files made public via bucket policy (high risk)
+ruby csv_file.rb --access-method bucket_policy -o bucket_policy_public.csv
+
+# Export files made public via object ACL
+ruby csv_file.rb --access-method object_acl -o object_acl_public.csv
 ```
 
 **Cleanup preparation - Files for deletion:**
@@ -408,6 +435,9 @@ The exported CSV includes these columns:
 - `can_be_deleted` - Whether marked for deletion
 - `deletion_approved_by` - Who approved deletion
 - `notes` - Additional notes
+- `is_publicly_accessible` - Whether file is publicly accessible (1/0)
+- `public_access_method` - How file is public (bucket_policy, bucket_acl, object_acl, mixed, none)
+- `public_access_checked_at` - When permissions were last checked
 - `created_at` - Database record creation time
 - `updated_at` - Database record update time
 
@@ -418,6 +448,7 @@ Each export includes summary statistics:
 - Breakdown by bucket
 - Ownership status
 - Files marked for deletion
+- **Public access analysis** - Count and size of public files, breakdown by access method
 - Age analysis
 - Department breakdown (if available)
 
@@ -430,15 +461,20 @@ Here are common workflows combining both scripts:
 # Step 1: Run the main audit
 ruby audit.rb
 
-# Step 2: Export public files for security review
-ruby csv_file.rb --verbose > /dev/null 2>&1  # Check if we have public files
-sqlite3 aws_s3_inventory.db "SELECT COUNT(*) FROM files WHERE is_publicly_accessible = 1;"
+# Step 2: Export all public files for security review
+ruby csv_file.rb --public -o all_public_files_review.csv
 
-# If you have public files:
-ruby csv_file.rb --larger-than 1 -o security_review_public_files.csv
+# Step 3: Export high-risk public files (large files public via bucket policy)
+ruby csv_file.rb --access-method bucket_policy --larger-than 1 -o high_risk_bucket_policy.csv
 
-# Step 3: Export unowned files for assignment
+# Step 4: Export public files via object ACLs for review
+ruby csv_file.rb --access-method object_acl -o public_via_object_acl.csv
+
+# Step 5: Export unowned files for assignment
 ruby csv_file.rb --no-owner --larger-than 10 -o unowned_files_for_assignment.csv
+
+# Step 6: Export large private files to verify they should be private
+ruby csv_file.rb --private --larger-than 100 -o large_private_files_verify.csv
 ```
 
 ### File Cleanup and Cost Optimization Workflow
@@ -482,6 +518,28 @@ ruby csv_file.rb --older-than 730 -o "$REPORT_DIR/very_old_files_$DATE.csv"
 ruby csv_file.rb --larger-than 1000 --limit 100 -o "$REPORT_DIR/largest_files_$DATE.csv"
 
 echo "Monthly S3 audit reports generated in $REPORT_DIR"
+```
+
+### Security-Focused Monitoring Workflow
+```bash
+# Weekly security check script
+#!/bin/bash
+DATE=$(date +%Y%m%d)
+SECURITY_DIR="security_reports/$DATE"
+mkdir -p $SECURITY_DIR
+
+# Run fresh audit
+ruby audit.rb
+
+# Generate security-focused reports
+ruby csv_file.rb --public -o "$SECURITY_DIR/all_public_files_$DATE.csv"
+ruby csv_file.rb --access-method bucket_policy -o "$SECURITY_DIR/bucket_policy_public_$DATE.csv"
+ruby csv_file.rb --access-method mixed -o "$SECURITY_DIR/mixed_access_public_$DATE.csv"
+ruby csv_file.rb --public --larger-than 100 -o "$SECURITY_DIR/large_public_files_$DATE.csv"
+
+# Check for new public files (compare with previous week)
+echo "Security audit reports generated in $SECURITY_DIR"
+echo "Review public files, especially those with bucket_policy access method"
 ```
 
 ## Customization
